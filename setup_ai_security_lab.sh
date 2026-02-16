@@ -27,6 +27,9 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Prevent interactive prompts during package installation
+export DEBIAN_FRONTEND=noninteractive
+
 # ── Configuration ────────────────────────────────────────────────────────────
 LAB_ROOT="/opt/ai-security-lab"
 VENV_BASE="${LAB_ROOT}/venvs"
@@ -76,7 +79,7 @@ log "Updating apt package lists..."
 apt-get update -qq 2>>"$LOG_FILE"
 
 log "Installing base build tools and libraries..."
-apt-get install -y -qq \
+apt-get install -y -q \
     build-essential \
     git \
     curl \
@@ -101,7 +104,11 @@ apt-get install -y -qq \
     xz-utils \
     jq \
     unzip \
-    2>>"$LOG_FILE"
+    2>>"$LOG_FILE" || {
+    err "Failed to install base packages. Check ${LOG_FILE} for details."
+    exit 1
+}
+log "Base build tools and libraries installed successfully."
 
 # =============================================================================
 # 2. PYTHON 3.11 (via deadsnakes or source build)
