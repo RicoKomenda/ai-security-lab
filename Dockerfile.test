@@ -1,0 +1,41 @@
+# =============================================================================
+# AI Security Lab - Test Container (Debian 13 Trixie)
+# =============================================================================
+# Purpose: Validate the setup script in an isolated Debian 13 environment
+#          without spinning up a full VM.
+#
+# Limitations vs. real VM:
+#   - No systemd (Ollama/JupyterLab systemd services won't auto-start)
+#   - No GPU passthrough (CPU-only mode)
+#   - Docker-in-Docker not enabled by default
+#   - Ollama model pulls are skipped (saves bandwidth/time)
+#
+# Build:  docker build -f Dockerfile.test -t ai-seclab-test .
+# Run:    docker run -it --rm ai-seclab-test
+# =============================================================================
+
+FROM debian:trixie
+
+# Prevent interactive prompts during apt installs
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+
+# Pre-install sudo so the script's sudo checks work
+RUN apt-get update -qq && \
+    apt-get install -y -qq sudo procps && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create a non-root test user (the script expects SUDO_USER)
+RUN useradd -m -s /bin/bash labuser && \
+    echo "labuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Copy the setup script
+COPY setup_ai_security_lab.sh /tmp/setup_ai_security_lab.sh
+RUN chmod +x /tmp/setup_ai_security_lab.sh
+
+# Copy the guide (for reference inside the container)
+COPY AI_SECURITY_LAB_GUIDE.md /tmp/AI_SECURITY_LAB_GUIDE.md
+
+# Default: drop into bash so you can run the script interactively
+WORKDIR /tmp
+CMD ["/bin/bash"]
