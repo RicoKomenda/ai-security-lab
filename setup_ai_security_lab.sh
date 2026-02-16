@@ -207,23 +207,62 @@ if command -v ollama &>/dev/null; then
     log "Ollama already installed: $(ollama --version 2>&1 || echo 'installed')"
 else
     log "Installing Ollama..."
-    curl -fsSL https://ollama.com/install.sh | sh 2>>"$LOG_FILE"
-    log "Ollama installed."
+    if command -v timeout &>/dev/null; then
+        INSTALL_CMD='timeout 300 bash -c "curl -fsSL https://ollama.com/install.sh | sh"'
+    else
+        INSTALL_CMD='bash -c "curl -fsSL https://ollama.com/install.sh | sh"'
+    fi
+    
+    if eval "$INSTALL_CMD" 2>>"$LOG_FILE"; then
+        log "Ollama installed successfully."
+    else
+        err "Ollama installation failed or timed out. Check ${LOG_FILE} for details."
+        warn "You can install Ollama manually later with: curl -fsSL https://ollama.com/install.sh | sh"
+    fi
 fi
 
-log "Pulling default models (this may take a while)..."
-warn "Models will be pulled in background. Run manually if needed:"
-warn "  ollama pull llama3.2:1b"
-warn "  ollama pull mistral-nemo"
-warn "  ollama pull qwen3:0.6b"
-
-# Pull a model in the background (best-effort; Ollama service may not be up yet)
+log "Checking Ollama service status..."
 OLLAMA_PID=""
-if command -v ollama &>/dev/null && pgrep -x ollama &>/dev/null; then
-    su - "$REAL_USER" -c "ollama pull llama3.2:1b" 2>>"$LOG_FILE" &
-    OLLAMA_PID=$!
+
+# Try to start Ollama service if it's not running
+if command -v ollama &>/dev/null; then
+    if ! pgrep -x ollama &>/dev/null; then
+        log "Starting Ollama service..."
+        # Try to start Ollama as the real user (it runs as a user service)
+        if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then
+            # Check if there's a user service
+            if systemctl --user -M "${REAL_USER}@" list-units ollama.service &>/dev/null 2>&1; then
+                systemctl --user -M "${REAL_USER}@" start ollama.service 2>>"$LOG_FILE" || true
+            fi
+        fi
+        # Give Ollama a moment to start
+        sleep 2
+    fi
+    
+    # Check if Ollama is now running
+    if pgrep -x ollama &>/dev/null; then
+        # Ollama process is running
+        OLLAMA_RUNNING=true
+    elif command -v timeout &>/dev/null && timeout 5 bash -c 'until curl -s http://127.0.0.1:11434/api/tags >/dev/null 2>&1; do sleep 1; done' 2>/dev/null; then
+        # Ollama API is responding
+        OLLAMA_RUNNING=true
+    else
+        OLLAMA_RUNNING=false
+    fi
+    
+    if [[ "${OLLAMA_RUNNING:-false}" == "true" ]]; then
+        warn "Ollama service is running. Model pulls will be done manually after setup."
+        warn "To pull models, run:"
+        warn "  ollama pull llama3.2:1b"
+        warn "  ollama pull mistral-nemo"
+        warn "  ollama pull qwen3:0.6b"
+    else
+        warn "Ollama service not running - skipping model pull."
+        warn "Start Ollama manually with: ollama serve"
+        warn "Then pull models with: ollama pull llama3.2:1b"
+    fi
 else
-    warn "Ollama service not running - skipping model pull. Start Ollama and pull models manually."
+    warn "Ollama command not found - skipping model pull."
 fi
 
 # =============================================================================
@@ -685,8 +724,7 @@ log "Resource links file created: ${LAB_ROOT}/RESOURCE_LINKS.txt"
 # =============================================================================
 # FINAL SUMMARY
 # =============================================================================
-# Wait for background Ollama model pull
-[[ -n "${OLLAMA_PID:-}" ]] && wait "$OLLAMA_PID" 2>/dev/null || true
+# Note: Ollama model pulls are done manually by the user after setup
 
 # Fix ownership so the real user can work with everything
 chown -R "$REAL_USER:$REAL_USER" "$LAB_ROOT"
