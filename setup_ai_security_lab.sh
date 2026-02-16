@@ -76,10 +76,14 @@ log "Started:   $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 header "1/15 - System packages & prerequisites"
 
 log "Updating apt package lists..."
-apt-get update -qq 2>>"$LOG_FILE"
+if ! apt-get update -qq 2>&1 | tee -a "$LOG_FILE"; then
+    err "Failed to update package lists. Check ${LOG_FILE} for details."
+    warn "This might be due to network issues or repository configuration problems."
+    exit 1
+fi
 
 log "Installing base build tools and libraries..."
-apt-get install -y -q \
+if ! apt-get install -y -q \
     build-essential \
     git \
     curl \
@@ -87,7 +91,6 @@ apt-get install -y -q \
     ca-certificates \
     gnupg \
     lsb-release \
-    software-properties-common \
     libssl-dev \
     libffi-dev \
     zlib1g-dev \
@@ -104,10 +107,19 @@ apt-get install -y -q \
     xz-utils \
     jq \
     unzip \
-    2>>"$LOG_FILE" || {
+    2>&1 | tee -a "$LOG_FILE"; then
     err "Failed to install base packages. Check ${LOG_FILE} for details."
     exit 1
-}
+fi
+
+# Try to install software-properties-common separately (may not exist in all Debian versions)
+if apt-cache show software-properties-common &>/dev/null; then
+    log "Installing software-properties-common..."
+    apt-get install -y -q software-properties-common 2>&1 | tee -a "$LOG_FILE" || warn "software-properties-common not available (optional package)"
+else
+    warn "software-properties-common not available in repositories (skipping - optional package)"
+fi
+
 log "Base build tools and libraries installed successfully."
 
 # =============================================================================
