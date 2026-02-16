@@ -271,10 +271,32 @@ fi
 create_venv() {
     local name="$1"
     local venv_path="${VENV_BASE}/${name}"
-    python${PYTHON_VERSION} -m venv "$venv_path"
-    "$venv_path/bin/pip" install --upgrade pip setuptools wheel 2>>"$LOG_FILE"
+
+    log "Creating venv: ${name}"
+    python${PYTHON_VERSION} -m venv "$venv_path" 2>>"$LOG_FILE" || {
+        err "Failed to create venv: ${name}"
+        exit 1
+    }
+
+    # Ensure pip exists
+    if [[ ! -f "${venv_path}/bin/pip" ]]; then
+        warn "pip missing in ${name} venv — bootstrapping with ensurepip"
+        "${venv_path}/bin/python" -m ensurepip --upgrade 2>>"$LOG_FILE" || {
+            err "ensurepip failed for ${name}"
+            exit 1
+        }
+    fi
+
+    # Upgrade tooling safely
+    "${venv_path}/bin/python" -m pip install --upgrade pip setuptools wheel \
+        2>>"$LOG_FILE" || {
+        err "pip bootstrap failed for ${name}"
+        exit 1
+    }
+
     echo "$venv_path"
 }
+
 
 # =============================================================================
 # 6. LM EVAL HARNESS
