@@ -272,24 +272,24 @@ create_venv() {
     local name="$1"
     local venv_path="${VENV_BASE}/${name}"
 
-    log "Creating venv: ${name}"
+    log "Creating venv: ${name}" >&2
     if ! python${PYTHON_VERSION} -m venv "$venv_path" 2>>"$LOG_FILE"; then
-        err "Failed to create venv: ${name}"
+        err "Failed to create venv: ${name}" >&2
         return 1
     fi
 
     # Ensure pip exists
     if [[ ! -f "${venv_path}/bin/pip" ]]; then
-        warn "pip missing in ${name} venv — bootstrapping with ensurepip"
+        warn "pip missing in ${name} venv — bootstrapping with ensurepip" >&2
         if ! "${venv_path}/bin/python" -m ensurepip --upgrade 2>>"$LOG_FILE"; then
-            err "ensurepip failed for ${name}"
+            err "ensurepip failed for ${name}" >&2
             return 1
         fi
     fi
 
     # Upgrade tooling safely
     if ! "${venv_path}/bin/python" -m pip install --upgrade pip setuptools wheel 2>>"$LOG_FILE"; then
-        err "pip bootstrap failed for ${name}"
+        err "pip bootstrap failed for ${name}" >&2
         return 1
     fi
 
@@ -472,7 +472,10 @@ cd "$LAB_ROOT"
 # =============================================================================
 header "14/15 - Jupyter Notebook environment"
 
-VENV_JUPYTER=$(create_venv "jupyter")
+VENV_JUPYTER=$(create_venv "jupyter") || {
+    err "Failed to create venv for jupyter. Check ${LOG_FILE} for details."
+    exit 1
+}
 log "Installing JupyterLab and Jupyter Notebook..."
 "${VENV_JUPYTER}/bin/pip" install jupyterlab notebook ipywidgets 2>>"$LOG_FILE"
 
