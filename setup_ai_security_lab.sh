@@ -45,9 +45,9 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log()    { echo -e "${GREEN}[+]${NC} $*" | tee -a "$LOG_FILE"; }
-warn()   { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE"; }
-err()    { echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE"; }
+log()    { echo -e "${GREEN}[+]${NC} $*" | tee -a "$LOG_FILE" >&2; }
+warn()   { echo -e "${YELLOW}[!]${NC} $*" | tee -a "$LOG_FILE" >&2; }
+err()    { echo -e "${RED}[ERROR]${NC} $*" | tee -a "$LOG_FILE" >&2; }
 header() { echo -e "\n${CYAN}═══════════════════════════════════════════════════════════════${NC}" | tee -a "$LOG_FILE"
            echo -e "${CYAN}  $*${NC}" | tee -a "$LOG_FILE"
            echo -e "${CYAN}═══════════════════════════════════════════════════════════════${NC}" | tee -a "$LOG_FILE"; }
@@ -272,24 +272,24 @@ create_venv() {
     local name="$1"
     local venv_path="${VENV_BASE}/${name}"
 
-    log "Creating venv: ${name}" >&2
+    log "Creating venv: ${name}"
     if ! python${PYTHON_VERSION} -m venv "$venv_path" 2>>"$LOG_FILE"; then
-        err "Failed to create venv: ${name}" >&2
+        err "Failed to create venv: ${name}"
         return 1
     fi
 
     # Ensure pip exists
     if [[ ! -f "${venv_path}/bin/pip" ]]; then
-        warn "pip missing in ${name} venv — bootstrapping with ensurepip" >&2
+        warn "pip missing in ${name} venv — bootstrapping with ensurepip"
         if ! "${venv_path}/bin/python" -m ensurepip --upgrade 2>>"$LOG_FILE"; then
-            err "ensurepip failed for ${name}" >&2
+            err "ensurepip failed for ${name}"
             return 1
         fi
     fi
 
     # Upgrade tooling safely
     if ! "${venv_path}/bin/python" -m pip install --upgrade pip setuptools wheel 2>>"$LOG_FILE"; then
-        err "pip bootstrap failed for ${name}" >&2
+        err "pip bootstrap failed for ${name}"
         return 1
     fi
 
