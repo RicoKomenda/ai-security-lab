@@ -307,6 +307,11 @@ create_venv "lm-eval-harness" || {
     err "Failed to create venv for lm-eval-harness. Check ${LOG_FILE} for details."
     exit 1
 }
+
+# DEBUG: Show what VENV_PATH contains
+echo "DEBUG: VENV_PATH='${VENV_PATH}'" | tee -a "$LOG_FILE"
+echo "DEBUG: pip exists? $(ls -la "${VENV_PATH}/bin/pip" 2>&1)" | tee -a "$LOG_FILE"
+
 log "Cloning lm-evaluation-harness..."
 git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness.git \
     "${REPOS_DIR}/lm-evaluation-harness" 2>>"$LOG_FILE" || log "Already cloned."
