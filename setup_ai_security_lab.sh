@@ -267,33 +267,34 @@ fi
 
 # =============================================================================
 # HELPER: Create a Python venv and install into it
+# Sets the global variable VENV_PATH on success
 # =============================================================================
 create_venv() {
     local name="$1"
-    local venv_path="${VENV_BASE}/${name}"
+    VENV_PATH="${VENV_BASE}/${name}"
 
     log "Creating venv: ${name}"
-    if ! python${PYTHON_VERSION} -m venv "$venv_path" 2>>"$LOG_FILE"; then
+    if ! python${PYTHON_VERSION} -m venv "$VENV_PATH" 2>>"$LOG_FILE"; then
         err "Failed to create venv: ${name}"
         return 1
     fi
 
     # Ensure pip exists
-    if [[ ! -f "${venv_path}/bin/pip" ]]; then
+    if [[ ! -f "${VENV_PATH}/bin/pip" ]]; then
         warn "pip missing in ${name} venv — bootstrapping with ensurepip"
-        if ! "${venv_path}/bin/python" -m ensurepip --upgrade 2>>"$LOG_FILE"; then
+        if ! "${VENV_PATH}/bin/python" -m ensurepip --upgrade 2>>"$LOG_FILE"; then
             err "ensurepip failed for ${name}"
             return 1
         fi
     fi
 
     # Upgrade tooling safely
-    if ! "${venv_path}/bin/python" -m pip install --upgrade pip setuptools wheel 2>>"$LOG_FILE"; then
+    if ! "${VENV_PATH}/bin/python" -m pip install --upgrade pip setuptools wheel 2>>"$LOG_FILE"; then
         err "pip bootstrap failed for ${name}"
         return 1
     fi
 
-    echo "$venv_path"
+    return 0
 }
 
 
@@ -302,7 +303,7 @@ create_venv() {
 # =============================================================================
 header "6/15 - LM Eval Harness (EleutherAI)"
 
-VENV=$(create_venv "lm-eval-harness") || {
+create_venv "lm-eval-harness" || {
     err "Failed to create venv for lm-eval-harness. Check ${LOG_FILE} for details."
     exit 1
 }
@@ -311,8 +312,8 @@ git clone --depth 1 https://github.com/EleutherAI/lm-evaluation-harness.git \
     "${REPOS_DIR}/lm-evaluation-harness" 2>>"$LOG_FILE" || log "Already cloned."
 
 log "Installing lm-eval with HuggingFace + API backends..."
-"${VENV}/bin/pip" install -e "${REPOS_DIR}/lm-evaluation-harness[hf,api]" 2>>"$LOG_FILE"
-log "LM Eval Harness installed. Activate: source ${VENV}/bin/activate"
+"${VENV_PATH}/bin/pip" install -e "${REPOS_DIR}/lm-evaluation-harness[hf,api]" 2>>"$LOG_FILE"
+log "LM Eval Harness installed. Activate: source ${VENV_PATH}/bin/activate"
 
 # =============================================================================
 # 7. PROMPTFOO
@@ -328,52 +329,52 @@ log "PromptFoo installed: $(npx promptfoo --version 2>/dev/null || echo 'OK')"
 # =============================================================================
 header "8/15 - CleverHans"
 
-VENV=$(create_venv "cleverhans") || {
+create_venv "cleverhans" || {
     err "Failed to create venv for cleverhans. Check ${LOG_FILE} for details."
     exit 1
 }
 log "Installing CleverHans with PyTorch backend..."
-"${VENV}/bin/pip" install cleverhans torch torchvision 2>>"$LOG_FILE"
-log "CleverHans installed. Activate: source ${VENV}/bin/activate"
+"${VENV_PATH}/bin/pip" install cleverhans torch torchvision 2>>"$LOG_FILE"
+log "CleverHans installed. Activate: source ${VENV_PATH}/bin/activate"
 
 # =============================================================================
 # 9. GARAK
 # =============================================================================
 header "9/15 - Garak (NVIDIA)"
 
-VENV=$(create_venv "garak") || {
+create_venv "garak" || {
     err "Failed to create venv for garak. Check ${LOG_FILE} for details."
     exit 1
 }
 log "Installing Garak..."
-"${VENV}/bin/pip" install -U garak 2>>"$LOG_FILE"
-log "Garak installed. Activate: source ${VENV}/bin/activate"
+"${VENV_PATH}/bin/pip" install -U garak 2>>"$LOG_FILE"
+log "Garak installed. Activate: source ${VENV_PATH}/bin/activate"
 
 # =============================================================================
 # 10. GISKARD
 # =============================================================================
 header "10/15 - Giskard"
 
-VENV=$(create_venv "giskard") || {
+create_venv "giskard" || {
     err "Failed to create venv for giskard. Check ${LOG_FILE} for details."
     exit 1
 }
 log "Installing Giskard with LLM extras..."
-"${VENV}/bin/pip" install "giskard[llm]" -U 2>>"$LOG_FILE"
-log "Giskard installed. Activate: source ${VENV}/bin/activate"
+"${VENV_PATH}/bin/pip" install "giskard[llm]" -U 2>>"$LOG_FILE"
+log "Giskard installed. Activate: source ${VENV_PATH}/bin/activate"
 
 # =============================================================================
 # 11. PYRIT
 # =============================================================================
 header "11/15 - PyRIT (Microsoft)"
 
-VENV=$(create_venv "pyrit") || {
+create_venv "pyrit" || {
     err "Failed to create venv for pyrit. Check ${LOG_FILE} for details."
     exit 1
 }
 log "Installing PyRIT..."
-"${VENV}/bin/pip" install pyrit 2>>"$LOG_FILE"
-log "PyRIT installed. Activate: source ${VENV}/bin/activate"
+"${VENV_PATH}/bin/pip" install pyrit 2>>"$LOG_FILE"
+log "PyRIT installed. Activate: source ${VENV_PATH}/bin/activate"
 
 # =============================================================================
 # 12. GIT CLONE - LABS & VULNERABLE APPS
@@ -413,15 +414,15 @@ log "  docker compose up"
 
 # ── Damn Vulnerable LLM Agent ───────────────────────────────────────────────
 log "[damn-vulnerable-llm-agent] Setting up venv..."
-VENV=$(create_venv "damn-vulnerable-llm-agent") || {
+create_venv "damn-vulnerable-llm-agent" || {
     err "Failed to create venv for damn-vulnerable-llm-agent. Check ${LOG_FILE} for details."
     exit 1
 }
 if [[ -f "${REPOS_DIR}/damn-vulnerable-llm-agent/requirements.txt" ]]; then
-    "${VENV}/bin/pip" install -r "${REPOS_DIR}/damn-vulnerable-llm-agent/requirements.txt" 2>>"$LOG_FILE"
-    "${VENV}/bin/pip" install python-dotenv 2>>"$LOG_FILE"
+    "${VENV_PATH}/bin/pip" install -r "${REPOS_DIR}/damn-vulnerable-llm-agent/requirements.txt" 2>>"$LOG_FILE"
+    "${VENV_PATH}/bin/pip" install python-dotenv 2>>"$LOG_FILE"
 fi
-log "  Activate: source ${VENV}/bin/activate"
+log "  Activate: source ${VENV_PATH}/bin/activate"
 log "  Run:      python -m streamlit run ${REPOS_DIR}/damn-vulnerable-llm-agent/main.py"
 
 # ── Vulnerable LLMs (Docker-based) ──────────────────────────────────────────
@@ -472,10 +473,11 @@ cd "$LAB_ROOT"
 # =============================================================================
 header "14/15 - Jupyter Notebook environment"
 
-VENV_JUPYTER=$(create_venv "jupyter") || {
+create_venv "jupyter" || {
     err "Failed to create venv for jupyter. Check ${LOG_FILE} for details."
     exit 1
 }
+VENV_JUPYTER="${VENV_PATH}"
 log "Installing JupyterLab and Jupyter Notebook..."
 "${VENV_JUPYTER}/bin/pip" install jupyterlab notebook ipywidgets 2>>"$LOG_FILE"
 
