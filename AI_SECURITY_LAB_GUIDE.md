@@ -87,6 +87,12 @@ lab-llm doctor     # verify endpoint
 
 For an offline backend (Ollama on the same machine), see [Appendix: Optional offline backend with Ollama](#appendix-optional-offline-backend-with-ollama).
 
+### Known limitation: AI Red-Teaming Playground Labs
+
+AI-RTP's chat-copilot service is a .NET app built on Microsoft Semantic Kernel. Its internal embedding generator is constructed with a `Azure.AI.OpenAI.OpenAIClient` that hardcodes `api.openai.com` at the SDK level — no config knob can redirect it. As a result, AI-RTP cannot be pointed at LiteLLM / OpenRouter / any other OpenAI-compatible proxy. It requires a real OpenAI or Azure OpenAI key.
+
+This is the only tool in the lab with this limitation. See [§10.1](#101-ai-red-teaming-playground-labs) for details.
+
 ---
 
 ## 1. Overview & Architecture
@@ -937,29 +943,58 @@ Microsoft's Docker-based AI red-teaming challenges.
 
 **Location:** `/opt/ai-security-lab/repos/AI-Red-Teaming-Playground-Labs`
 
-**Starting:**
+> ⚠️ **Not in the default unified-router flow.** AI-RTP's chat-copilot service is
+> a .NET app built on Microsoft Semantic Kernel. Its internal embedding service
+> (`OpenAITextEmbeddingGeneration` → `Azure.AI.OpenAI.OpenAIClient`) is
+> constructed with only an API key and **hardcodes `api.openai.com` at the SDK
+> level** — there is no configuration knob to redirect it to an OpenAI-compatible
+> endpoint like LiteLLM. Even though `lab-llm configure` writes a sensible
+> `.env`, the embedding requests will fail with `401 Unauthorized` against the
+> real OpenAI API.
+>
+> To use AI-RTP you need one of:
+> - A real OpenAI API key (set `OPENAI_API_KEY`, `OPENAI_TEXT_MODEL`,
+>   `OPENAI_EMBEDDING_MODEL` in `.env`, then `docker compose -f
+>   docker-compose-openai.yaml up`); or
+> - A real Azure OpenAI deployment (use the default `docker-compose.yaml` and
+>   fill in the `AOAI_*` vars); or
+> - A local LiteLLM proxy on the VM that intercepts `api.openai.com` via
+>   `/etc/hosts` injection in each chat-copilot service (~30 min of compose
+>   surgery, see "Workaround: transparent api.openai.com proxy" below).
+>
+> The other six tools (Garak, PyRIT, PromptFoo, Giskard, MAESTRO, DVLA/FinBot)
+> all work cleanly through `lab-llm configure` regardless of provider.
+
+**Starting (if you have a real OpenAI / Azure key):**
 
 ```bash
 cd /opt/ai-security-lab/repos/AI-Red-Teaming-Playground-Labs
-cp .env.example .env
-# Edit .env with your Azure OpenAI or OpenAI API keys
 
-# For Azure OpenAI:
-docker compose up
+# .env was initialised by the setup script with SECRET_KEY and AUTH_KEY.
+# Add your real API key information manually:
+#   For Azure OpenAI: AOAI_API_KEY, AOAI_ENDPOINT, AOAI_MODEL_NAME
+#   For OpenAI:       OPENAI_API_KEY, OPENAI_TEXT_MODEL, OPENAI_EMBEDDING_MODEL
 
-# For OpenAI:
-docker compose -f docker-compose-openai.yaml up
+# Azure path:
+docker compose up -d
+
+# OpenAI path:
+docker compose -f docker-compose-openai.yaml up -d
 ```
 
-**Access:** `http://localhost:5000/login?auth=YOUR-AUTH-KEY`
+**Access:** `http://localhost:5000/login?auth=YOUR-AUTH-KEY` (the AUTH_KEY was
+printed when setup ran; otherwise `grep AUTH_KEY .env`).
 
 **FAQ:**
 
 **Q: Containers fail to start.**
 A: Check Docker is running (`sudo systemctl start docker`). Ensure your user is in the docker group (`newgrp docker`). Verify `.env` is correctly configured.
 
-**Q: What API keys do I need?**
-A: Either an Azure OpenAI endpoint + key (with `text-embedding-ada-002` deployment), or an OpenAI API key.
+**Q: `Parameter 'modelId' cannot be empty` on startup.**
+A: `OPENAI_EMBEDDING_MODEL` (OpenAI compose) or `AOAI_MODEL_NAME` (Azure compose) is blank. Set it in `.env` and `docker compose down && up -d`.
+
+**Q: `401 Unauthorized` when launching a level via a LiteLLM/OpenRouter/etc. endpoint.**
+A: AI-RTP cannot use OpenAI-compatible proxies (see the limitation note above). Use a real OpenAI or Azure key for this lab specifically.
 
 ---
 
