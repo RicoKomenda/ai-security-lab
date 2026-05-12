@@ -786,7 +786,9 @@ OPENAI_MODEL=${model}
 
     local pyrit_env="${REAL_HOME}/.pyrit/.env"
     upsert_env "$pyrit_env" "OPENAI_CHAT_KEY"      "${api_key}"
-    upsert_env "$pyrit_env" "OPENAI_CHAT_ENDPOINT" "${base_url}/chat/completions"
+    # PyRIT 0.11+ uses the OpenAI SDK under the hood and appends /chat/completions
+    # itself. Passing the full path triggers a deprecation warning. Pass the base URL.
+    upsert_env "$pyrit_env" "OPENAI_CHAT_ENDPOINT" "${base_url}"
     upsert_env "$pyrit_env" "OPENAI_CHAT_MODEL"    "${model}"
     chmod 0600 "$pyrit_env" 2>/dev/null || true
 
