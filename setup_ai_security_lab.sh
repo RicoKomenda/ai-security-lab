@@ -478,6 +478,21 @@ if [[ -f "$MAESTRO_PKG" ]] && grep -q '"genkit start -- ' "$MAESTRO_PKG"; then
     rm -f "${MAESTRO_PKG}.bak"
 fi
 
+# Patch MAESTRO's dev.ts to load .env before any flow import.
+# Original: `import { config } from 'dotenv'; config();` — but ES-module
+# imports hoist above the config() call, so genkit.ts evaluates with an empty
+# process.env and falls through to googleAI(). Use the dotenv side-effect
+# import to load .env at import-evaluation time.
+MAESTRO_DEV="${REPOS_DIR}/MAESTRO/src/ai/dev.ts"
+if [[ -f "$MAESTRO_DEV" ]] && grep -q "^import { config } from 'dotenv';" "$MAESTRO_DEV"; then
+    log "[MAESTRO] Patching dev.ts to load dotenv before flow imports..."
+    sed -i.bak \
+        -e "s|^import { config } from 'dotenv';$|import 'dotenv/config';|" \
+        -e "/^config();$/d" \
+        "$MAESTRO_DEV"
+    rm -f "${MAESTRO_DEV}.bak"
+fi
+
 log "  Run:  cd ${REPOS_DIR}/MAESTRO && npm run dev"
 log "  Also: cd ${REPOS_DIR}/MAESTRO && npm run genkit:watch  (in second terminal)"
 
