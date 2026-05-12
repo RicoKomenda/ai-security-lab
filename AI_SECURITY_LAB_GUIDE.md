@@ -401,38 +401,35 @@ Garak uses the unified router. Make sure you've already run `sudo lab-llm config
 source /opt/ai-security-lab/bin/source-llm-env   # exports OPENAI_*, OPENAICOMPATIBLE_API_KEY
 ```
 
-`source-llm-env` exports `OPENAICOMPATIBLE_API_KEY` (Garak's specific env-var name) aliased to the unified `OPENAI_API_KEY`. The base URL is read by Garak from a generator config file at `/opt/ai-security-lab/garak-target.yaml`, which `lab-llm configure` writes for you.
+`source-llm-env` exports `OPENAICOMPATIBLE_API_KEY` (Garak's specific env-var name) aliased to the unified `OPENAI_API_KEY`. The model name, model type, and base URL are read by Garak from a full config file at `/opt/ai-security-lab/garak-target.yaml`, which `lab-llm configure` writes for you.
 
 **Scan with the configured model:**
 
 ```bash
 python -m garak \
-    --target_type openai.OpenAICompatible \
-    --target_name "$OPENAI_MODEL" \
-    --generator_option_file /opt/ai-security-lab/garak-target.yaml \
+    --config /opt/ai-security-lab/garak-target.yaml \
     --probes dan
 ```
 
-**Scan with specific probes (short-flag form):**
+**Scan with specific probes:**
 
 ```bash
-GEN=/opt/ai-security-lab/garak-target.yaml
-TGT="--target_type openai.OpenAICompatible --target_name $OPENAI_MODEL --generator_option_file $GEN"
+CFG=/opt/ai-security-lab/garak-target.yaml
 
 # DAN jailbreak probes
-python -m garak $TGT -p dan
+python -m garak --config "$CFG" -p dan
 
 # Prompt injection
-python -m garak $TGT -p promptinject
+python -m garak --config "$CFG" -p promptinject
 
 # Encoding-based attacks
-python -m garak $TGT -p encoding
+python -m garak --config "$CFG" -p encoding
 
 # Multiple probes at once
-python -m garak $TGT -p "dan,encoding,promptinject"
+python -m garak --config "$CFG" -p "dan,encoding,promptinject"
 ```
 
-To target a different provider for a single run, just re-run `sudo lab-llm configure` with new `--model` / `--api-key` / `--base-url` and re-source `source-llm-env`. The generator config file gets regenerated too — no per-tool edits.
+To target a different provider for a single run, just re-run `sudo lab-llm configure` with new `--model` / `--api-key` / `--base-url`. The generator config file gets regenerated too — no per-tool edits.
 
 **Scan a HuggingFace model (separate flow, uses HF API directly):**
 
