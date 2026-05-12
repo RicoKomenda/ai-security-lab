@@ -412,9 +412,23 @@ done
 header "13/15 - Installing per-repo dependencies"
 
 # ── AI Red-Teaming Playground Labs (Docker-based) ───────────────────────────
+AIRTP_DIR="${REPOS_DIR}/AI-Red-Teaming-Playground-Labs"
+if [[ -f "${AIRTP_DIR}/.env.example" ]] && [[ ! -f "${AIRTP_DIR}/.env" ]]; then
+    log "[AI-Red-Teaming-Playground-Labs] Initialising .env with random SECRET_KEY/AUTH_KEY..."
+    AIRTP_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+    AIRTP_AUTH_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+    cat > "${AIRTP_DIR}/.env" <<ENVEOF
+# Initialised by setup_ai_security_lab.sh.
+# LLM-related keys are filled in by 'sudo lab-llm configure'.
+SECRET_KEY=${AIRTP_SECRET_KEY}
+AUTH_KEY=${AIRTP_AUTH_KEY}
+ENVEOF
+    chmod 0600 "${AIRTP_DIR}/.env"
+    chown "$REAL_USER:$REAL_USER" "${AIRTP_DIR}/.env" 2>/dev/null || true
+    log "  Login URL after launch: http://localhost:5000/login?auth=${AIRTP_AUTH_KEY}"
+fi
 log "[AI-Red-Teaming-Playground-Labs] Docker-based. Run with:"
-log "  cd ${REPOS_DIR}/AI-Red-Teaming-Playground-Labs"
-log "  cp .env.example .env   # then edit .env with your API keys"
+log "  cd ${AIRTP_DIR}"
 log "  docker compose up"
 
 # ── Damn Vulnerable LLM Agent ───────────────────────────────────────────────
@@ -838,6 +852,15 @@ OPENAI_MODEL=${model}
         upsert_env "$maestro_env" "LLM_PROVIDER" "openai"
         upsert_env "$maestro_env" "LLM_MODEL"    "${model}"
         chmod 0600 "$maestro_env" 2>/dev/null || true
+    fi
+
+    # AI Red-Teaming Playground reads OPENAI_TEXT_MODEL, not OPENAI_MODEL.
+    # OPENAI_EMBEDDING_MODEL is also expected for some labs but the model name
+    # varies by deployment, so leave it to the user.
+    local airtp_env="${LAB_ROOT}/repos/AI-Red-Teaming-Playground-Labs/.env"
+    if [[ -d "$(dirname "$airtp_env")" ]]; then
+        upsert_env "$airtp_env" "OPENAI_TEXT_MODEL" "${model}"
+        chmod 0600 "$airtp_env" 2>/dev/null || true
     fi
 
     write_atomic "${LAB_ROOT}/promptfooconfig.yaml" 0644 \
