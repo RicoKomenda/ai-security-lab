@@ -469,6 +469,15 @@ if [[ -f "$MAESTRO_GENKIT" ]] && ! grep -q "baseURL: process.env.OPENAI_BASE_URL
     rm -f "${MAESTRO_GENKIT}.bak"
 fi
 
+# Patch MAESTRO's package.json so `npm run genkit:watch` doesn't block on
+# Genkit CLI's interactive analytics / update-notification prompts.
+MAESTRO_PKG="${REPOS_DIR}/MAESTRO/package.json"
+if [[ -f "$MAESTRO_PKG" ]] && grep -q '"genkit start -- ' "$MAESTRO_PKG"; then
+    log "[MAESTRO] Patching package.json to skip Genkit interactive prompts..."
+    sed -i.bak 's|"genkit start -- |"genkit start --non-interactive -- |' "$MAESTRO_PKG"
+    rm -f "${MAESTRO_PKG}.bak"
+fi
+
 log "  Run:  cd ${REPOS_DIR}/MAESTRO && npm run dev"
 log "  Also: cd ${REPOS_DIR}/MAESTRO && npm run genkit:watch  (in second terminal)"
 
