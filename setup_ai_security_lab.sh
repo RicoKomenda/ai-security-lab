@@ -462,7 +462,67 @@ if command -v uv &>/dev/null; then
     cd "${REPOS_DIR}/finbot-ctf"
     uv sync 2>>"$LOG_FILE" || warn "  uv sync had issues - check manually."
     cd "$LAB_ROOT"
-    log "  Run: cd ${REPOS_DIR}/finbot-ctf && uv run python scripts/setup_database.py && uv run python run.py"
+
+    # --- FinBot patches for the unified router ---
+    FINBOT_DIR="${REPOS_DIR}/finbot-ctf"
+
+    # 1. Add Redis service to docker-compose.yml (event_bus uses Redis;
+    #    vendor registration 500s with "Connection refused" otherwise).
+    FINBOT_COMPOSE="${FINBOT_DIR}/docker-compose.yml"
+    if [[ -f "$FINBOT_COMPOSE" ]] && ! grep -q '^  redis:' "$FINBOT_COMPOSE"; then
+        log "[finbot-ctf] Adding Redis service to docker-compose.yml..."
+        python3 - "$FINBOT_COMPOSE" <<'PYEOF'
+import sys
+p = sys.argv[1]
+c = open(p).read()
+redis_block = """  redis:
+    image: redis:7-alpine
+    container_name: finbot-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+"""
+if "\nvolumes:" in c:
+    c = c.replace("\nvolumes:", "\n" + redis_block + "volumes:")
+else:
+    c = c.rstrip() + "\n\n" + redis_block
+open(p, "w").write(c)
+PYEOF
+    fi
+
+    # 2. Add OPENAI_BASE_URL and OPENAI_MODEL fields to Settings (pydantic
+    #    is configured with extra="forbid"; without these, lab-llm's .env
+    #    keys cause a ValidationError on startup).
+    FINBOT_CONFIG="${FINBOT_DIR}/finbot/config.py"
+    if [[ -f "$FINBOT_CONFIG" ]] && ! grep -q "OPENAI_BASE_URL" "$FINBOT_CONFIG"; then
+        log "[finbot-ctf] Patching finbot/config.py to declare OPENAI_BASE_URL / OPENAI_MODEL..."
+        python3 - "$FINBOT_CONFIG" <<'PYEOF'
+import re, sys
+p = sys.argv[1]
+c = open(p).read()
+c = re.sub(
+    r'^([ \t]*)(OPENAI_API_KEY: str = "")',
+    r'\1\2\n\1OPENAI_BASE_URL: str = ""\n\1OPENAI_MODEL: str = ""',
+    c, count=1, flags=re.MULTILINE,
+)
+open(p, "w").write(c)
+PYEOF
+    fi
+
+    # 3. Make openai_client.py pass base_url through to the SDK.
+    FINBOT_OAI="${FINBOT_DIR}/finbot/core/llm/openai_client.py"
+    if [[ -f "$FINBOT_OAI" ]] && ! grep -q "base_url=settings.OPENAI_BASE_URL" "$FINBOT_OAI"; then
+        log "[finbot-ctf] Patching openai_client.py to honour OPENAI_BASE_URL..."
+        sed -i.bak 's|AsyncOpenAI(api_key=settings.OPENAI_API_KEY)|AsyncOpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL or None)|' "$FINBOT_OAI"
+        rm -f "${FINBOT_OAI}.bak"
+    fi
+
+    log "  Run: cd ${FINBOT_DIR} && docker compose up -d && uv run python scripts/setup_database.py && uv run python run.py"
 else
     warn "  uv not found in PATH. Install manually: curl -LsSf https://astral.sh/uv/install.sh | sh"
 fi
@@ -857,6 +917,15 @@ OPENAI_MODEL=${model}
         upsert_env "$maestro_env" "LLM_PROVIDER" "openai"
         upsert_env "$maestro_env" "LLM_MODEL"    "${model}"
         chmod 0600 "$maestro_env" 2>/dev/null || true
+    fi
+
+    # FinBot CTF reads its own LLM_DEFAULT_MODEL (default "gpt-5-nano" — a
+    # non-existent placeholder). Override it so FinBot's onboarding agent
+    # and chat hit our configured model instead.
+    local finbot_env="${LAB_ROOT}/repos/finbot-ctf/.env"
+    if [[ -d "$(dirname "$finbot_env")" ]]; then
+        upsert_env "$finbot_env" "LLM_DEFAULT_MODEL" "${model}"
+        chmod 0600 "$finbot_env" 2>/dev/null || true
     fi
 
     # AI-RTP intentionally not wired — see the comment above the repo_envs loop.

@@ -1069,15 +1069,26 @@ OWASP's financial chatbot CTF platform with built-in challenges.
 
 **Location:** `/opt/ai-security-lab/repos/finbot-ctf`
 
+**LLM provider:** Wired to the unified router. The setup script patches
+`finbot/config.py` to declare `OPENAI_BASE_URL` / `OPENAI_MODEL` (pydantic
+is configured with `extra="forbid"` and would otherwise reject them) and
+`finbot/core/llm/openai_client.py` to pass `base_url` to the SDK.
+`lab-llm configure` writes `OPENAI_API_KEY` / `OPENAI_BASE_URL` /
+`OPENAI_MODEL` plus FinBot's own `LLM_DEFAULT_MODEL` to its `.env`.
+
 **Starting:**
 
 ```bash
 cd /opt/ai-security-lab/repos/finbot-ctf
 
-# Check prerequisites
-uv run python scripts/check_prerequisites.py
+# Start Redis + Postgres (Redis is required for FinBot's event_bus;
+# vendor registration 500s without it)
+docker compose up -d
 
-# Setup database (SQLite default)
+# Export the .env into the shell so uv-run inherits OPENAI_BASE_URL
+set -a; . ./.env; set +a
+
+# One-time database setup
 uv run python scripts/setup_database.py
 
 # Launch
@@ -1098,6 +1109,15 @@ uv run python run.py
 
 **Q: `uv` command not found.**
 A: Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`, then add `~/.local/bin` to your PATH.
+
+**Q: Vendor registration returns 500 with `Connection refused` to localhost:6379.**
+A: Redis isn't running. The setup script adds Redis to FinBot's `docker-compose.yml`; start it with `docker compose up -d` from the FinBot directory.
+
+**Q: 500 on startup with `ValidationError: extra_forbidden` for `openai_base_url`.**
+A: The `finbot/config.py` patch wasn't applied (you cloned before the patch landed). Re-run the relevant block in the setup script, or apply manually: add `OPENAI_BASE_URL: str = ""` and `OPENAI_MODEL: str = ""` next to `OPENAI_API_KEY` in `finbot/config.py`.
+
+**Q: I clicked the AI assistant but nothing happens / can't reach the chat.**
+A: Known upstream UI issue in FinBot (no network request fires; the click handler appears not to bind for some users). Unrelated to the unified router — the router is correctly configured and a Python smoke test against the same endpoint succeeds. Watch FinBot's repo for fixes, or use Garak / PyRIT / PromptFoo / Giskard for your hands-on red-teaming work.
 
 **Q: The main branch is unstable.**
 A: This is noted by the maintainers. If you encounter issues, check for a stable release tag: `git tag -l`.
