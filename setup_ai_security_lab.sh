@@ -540,8 +540,12 @@ cat > "${NOTEBOOKS_DIR}/00_lab_overview.ipynb" << 'NBEOF'
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "## 1. Verify Ollama Connection\n",
-    "Run this cell to check that Ollama is reachable."
+    "## 1. Verify the unified LLM router\n",
+    "All labs share `/opt/ai-security-lab/llm.env`. Configure once with:\n",
+    "```\n",
+    "sudo lab-llm configure --model gpt-4o-mini --api-key sk-...\n",
+    "```\n",
+    "Then run this cell to confirm the endpoint is reachable."
    ]
   },
   {
@@ -550,16 +554,12 @@ cat > "${NOTEBOOKS_DIR}/00_lab_overview.ipynb" << 'NBEOF'
    "metadata": {},
    "outputs": [],
    "source": [
-    "import urllib.request, json\n",
-    "try:\n",
-    "    resp = urllib.request.urlopen('http://127.0.0.1:11434/api/tags', timeout=5)\n",
-    "    models = json.loads(resp.read())['models']\n",
-    "    print(f'Ollama is running with {len(models)} model(s):')\n",
-    "    for m in models:\n",
-    "        print(f\"  - {m['name']}\")\n",
-    "except Exception as e:\n",
-    "    print(f'Ollama not reachable: {e}')\n",
-    "    print('Start it with: ollama serve')"
+    "import sys\n",
+    "sys.path.insert(0, '/opt/ai-security-lab/lib')\n",
+    "from llm_client import MODEL, BASE_URL, API_KEY\n",
+    "print(f'Model:    {MODEL}')\n",
+    "print(f'Base URL: {BASE_URL}')\n",
+    "print(f'API key:  {(API_KEY[:3] + \"…\" + API_KEY[-4:]) if len(API_KEY) >= 8 else \"(unset)\"}')"
    ]
   },
   {
@@ -610,8 +610,8 @@ cat > "${NOTEBOOKS_DIR}/00_lab_overview.ipynb" << 'NBEOF'
    "cell_type": "markdown",
    "metadata": {},
    "source": [
-    "## 3. Chat with a Local Model via Ollama\n",
-    "This cell works with any kernel."
+    "## 3. Chat with the configured LLM\n",
+    "Sends one chat completion through whatever endpoint `lab-llm configure` last set. Works with any kernel — uses only the standard library."
    ]
   },
   {
@@ -620,18 +620,24 @@ cat > "${NOTEBOOKS_DIR}/00_lab_overview.ipynb" << 'NBEOF'
    "metadata": {},
    "outputs": [],
    "source": [
-    "import urllib.request, json\n",
+    "import sys, json, urllib.request\n",
+    "sys.path.insert(0, '/opt/ai-security-lab/lib')\n",
+    "from llm_client import MODEL, BASE_URL, API_KEY\n",
     "\n",
-    "MODEL = 'llama3.2:1b'  # Change to your preferred model\n",
     "PROMPT = 'Explain prompt injection in one sentence.'\n",
-    "\n",
-    "data = json.dumps({'model': MODEL, 'prompt': PROMPT, 'stream': False}).encode()\n",
-    "req = urllib.request.Request('http://127.0.0.1:11434/api/generate',\n",
-    "                             data=data,\n",
-    "                             headers={'Content-Type': 'application/json'})\n",
+    "req = urllib.request.Request(\n",
+    "    BASE_URL.rstrip('/') + '/chat/completions',\n",
+    "    data=json.dumps({\n",
+    "        'model': MODEL,\n",
+    "        'messages': [{'role': 'user', 'content': PROMPT}],\n",
+    "    }).encode(),\n",
+    "    headers={\n",
+    "        'Content-Type': 'application/json',\n",
+    "        'Authorization': f'Bearer {API_KEY}',\n",
+    "    },\n",
+    ")\n",
     "resp = urllib.request.urlopen(req, timeout=120)\n",
-    "result = json.loads(resp.read())\n",
-    "print(result['response'])"
+    "print(json.loads(resp.read())['choices'][0]['message']['content'])"
    ]
   }
  ],
@@ -656,6 +662,318 @@ log "JupyterLab installed. Run with:"
 log "  source ${VENV_JUPYTER}/bin/activate && jupyter lab --notebook-dir=${NOTEBOOKS_DIR}"
 
 # =============================================================================
+# 14b. UNIFIED LLM ROUTER (lab-llm CLI + shared config)
+# =============================================================================
+header "Unified LLM router"
+
+LAB_BIN_DIR="${LAB_ROOT}/bin"
+LAB_LIB_DIR="${LAB_ROOT}/lib"
+LAB_LLM_ENV="${LAB_ROOT}/llm.env"
+mkdir -p "$LAB_BIN_DIR" "$LAB_LIB_DIR"
+
+log "Installing /usr/local/bin/lab-llm..."
+cat > /usr/local/bin/lab-llm << 'LABLLMEOF'
+#!/usr/bin/env bash
+# lab-llm — unified LLM configuration for AI Security Lab.
+# One CLI to point every tool at the same OpenAI-compatible endpoint.
+set -euo pipefail
+
+LAB_ROOT="/opt/ai-security-lab"
+LLM_ENV="${LAB_ROOT}/llm.env"
+DEFAULT_BASE_URL="https://api.openai.com/v1"
+
+if [[ ${LAB_LLM_ALLOW_ROOT:-0} -eq 0 && $EUID -eq 0 && -z "${SUDO_USER:-}" ]]; then
+    echo "Run via 'sudo' (so SUDO_USER is set) or as your user. Set LAB_LLM_ALLOW_ROOT=1 to override." >&2
+    exit 1
+fi
+REAL_USER="${SUDO_USER:-$(whoami)}"
+REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)
+[[ -n "$REAL_HOME" ]] || REAL_HOME="$HOME"
+
+usage() {
+    cat <<USAGE
+lab-llm — configure all AI Security Lab tools to use one OpenAI-compatible endpoint.
+
+Usage:
+  lab-llm configure --model MODEL --api-key KEY [--base-url URL]
+  lab-llm show
+  lab-llm doctor
+  lab-llm -h | --help
+
+Examples:
+  sudo lab-llm configure --model gpt-4o-mini --api-key sk-...
+  sudo lab-llm configure --model llama3.2 --api-key local \\
+                         --base-url http://127.0.0.1:11434/v1
+  lab-llm show
+  lab-llm doctor
+
+Default base URL: ${DEFAULT_BASE_URL}
+
+Files written by 'configure':
+  ${LLM_ENV}                              (canonical, mode 0600)
+  \$HOME/.pyrit/.env                       (PyRIT-specific var names)
+  ${LAB_ROOT}/repos/<repo>/.env           (where the repo was cloned)
+  ${LAB_ROOT}/promptfooconfig.yaml        (PromptFoo starter config)
+USAGE
+}
+
+# Idempotent upsert of KEY=VALUE in an env file. Preserves other lines.
+upsert_env() {
+    local file="$1" key="$2" value="$3"
+    local dir
+    dir=$(dirname "$file")
+    [[ -d "$dir" ]] || install -d -m 0755 -o "$REAL_USER" -g "$REAL_USER" "$dir" 2>/dev/null \
+                       || mkdir -p "$dir"
+    [[ -f "$file" ]] || : > "$file"
+    if grep -qE "^${key}=" "$file" 2>/dev/null; then
+        local tmp="${file}.tmp.$$"
+        awk -v k="$key" -v v="$value" '
+            BEGIN { FS=OFS="=" }
+            { if ($1 == k) { print k "=" v; next } print }
+        ' "$file" > "$tmp"
+        mv "$tmp" "$file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$file"
+    fi
+    chown "$REAL_USER:$REAL_USER" "$file" 2>/dev/null || true
+}
+
+write_atomic() {
+    local target="$1" mode="$2" content="$3"
+    local dir
+    dir=$(dirname "$target")
+    [[ -d "$dir" ]] || install -d -m 0755 -o "$REAL_USER" -g "$REAL_USER" "$dir" 2>/dev/null \
+                       || mkdir -p "$dir"
+    local tmp="${target}.tmp.$$"
+    printf '%s' "$content" > "$tmp"
+    chmod "$mode" "$tmp"
+    chown "$REAL_USER:$REAL_USER" "$tmp" 2>/dev/null || true
+    mv "$tmp" "$target"
+}
+
+cmd_configure() {
+    local model="" api_key="" base_url="$DEFAULT_BASE_URL"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model)    model="${2:-}"; shift 2 || true;;
+            --api-key)  api_key="${2:-}"; shift 2 || true;;
+            --base-url) base_url="${2:-}"; shift 2 || true;;
+            -h|--help)  usage; exit 0;;
+            *) echo "Unknown argument: $1" >&2; usage; exit 2;;
+        esac
+    done
+    [[ -n "$model" ]]   || { echo "--model is required" >&2; exit 2; }
+    [[ -n "$api_key" ]] || { echo "--api-key is required" >&2; exit 2; }
+    base_url="${base_url%/}"
+
+    write_atomic "$LLM_ENV" 0600 \
+"OPENAI_API_KEY=${api_key}
+OPENAI_BASE_URL=${base_url}
+OPENAI_MODEL=${model}
+"
+
+    local pyrit_env="${REAL_HOME}/.pyrit/.env"
+    upsert_env "$pyrit_env" "OPENAI_CHAT_KEY"      "${api_key}"
+    upsert_env "$pyrit_env" "OPENAI_CHAT_ENDPOINT" "${base_url}/chat/completions"
+    upsert_env "$pyrit_env" "OPENAI_CHAT_MODEL"    "${model}"
+    chmod 0600 "$pyrit_env" 2>/dev/null || true
+
+    local repo_envs=(
+        "${LAB_ROOT}/repos/AI-Red-Teaming-Playground-Labs/.env"
+        "${LAB_ROOT}/repos/finbot-ctf/.env"
+        "${LAB_ROOT}/repos/damn-vulnerable-llm-agent/.env"
+        "${LAB_ROOT}/repos/MAESTRO/.env"
+    )
+    for repo_env in "${repo_envs[@]}"; do
+        [[ -d "$(dirname "$repo_env")" ]] || continue
+        upsert_env "$repo_env" "OPENAI_API_KEY"  "${api_key}"
+        upsert_env "$repo_env" "OPENAI_BASE_URL" "${base_url}"
+        upsert_env "$repo_env" "OPENAI_MODEL"    "${model}"
+        chmod 0600 "$repo_env" 2>/dev/null || true
+    done
+
+    write_atomic "${LAB_ROOT}/promptfooconfig.yaml" 0644 \
+"# Generated by 'lab-llm configure'. Re-run to regenerate.
+description: AI Security Lab — default OpenAI-compatible provider
+providers:
+  - id: openai:chat:${model}
+    config:
+      apiBaseUrl: ${base_url}
+      apiKeyEnvar: OPENAI_API_KEY
+prompts:
+  - 'Answer concisely: {{prompt}}'
+tests:
+  - vars:
+      prompt: 'What is prompt injection?'
+"
+
+    local redacted="${api_key:0:3}…${api_key: -4}"
+    [[ ${#api_key} -lt 8 ]] && redacted="(short key)"
+    echo "[+] Wrote ${LLM_ENV}"
+    echo "[+] Wrote ${pyrit_env}"
+    echo "[+] Updated per-repo .env files (where repos exist)"
+    echo "[+] Wrote ${LAB_ROOT}/promptfooconfig.yaml"
+    echo
+    echo "  Model:    ${model}"
+    echo "  Base URL: ${base_url}"
+    echo "  API key:  ${redacted}"
+    echo
+    echo "Next:"
+    echo "  lab-llm doctor                                  # verify the endpoint"
+    echo "  source ${LAB_ROOT}/bin/source-llm-env           # export vars in this shell"
+}
+
+cmd_show() {
+    if [[ ! -f "$LLM_ENV" ]]; then
+        echo "No config yet. Run: sudo lab-llm configure --model ... --api-key ..." >&2
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    set -a; . "$LLM_ENV"; set +a
+    local key="${OPENAI_API_KEY:-}"
+    local redacted="(unset)"
+    if [[ -n "$key" ]]; then
+        if [[ ${#key} -ge 8 ]]; then
+            redacted="${key:0:3}…${key: -4}"
+        else
+            redacted="(short key)"
+        fi
+    fi
+    echo "Model:    ${OPENAI_MODEL:-(unset)}"
+    echo "Base URL: ${OPENAI_BASE_URL:-(unset)}"
+    echo "API key:  ${redacted}"
+}
+
+cmd_doctor() {
+    if [[ ! -f "$LLM_ENV" ]]; then
+        echo "No config yet. Run: sudo lab-llm configure --model ... --api-key ..." >&2
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    set -a; . "$LLM_ENV"; set +a
+    python3 - <<'PY'
+import json, os, sys, urllib.request, urllib.error
+url = os.environ["OPENAI_BASE_URL"].rstrip("/") + "/chat/completions"
+req = urllib.request.Request(
+    url,
+    data=json.dumps({
+        "model": os.environ["OPENAI_MODEL"],
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+    }).encode(),
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + os.environ["OPENAI_API_KEY"],
+    },
+)
+try:
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = json.loads(r.read())
+    print("[OK] endpoint responded.")
+    if body.get("choices"):
+        msg = body["choices"][0].get("message", {}).get("content", "")
+        print(f"     reply: {msg!r}")
+    sys.exit(0)
+except urllib.error.HTTPError as e:
+    snippet = e.read().decode(errors="replace")[:200]
+    print(f"[FAIL] HTTP {e.code}: {snippet}")
+    sys.exit(1)
+except Exception as e:
+    print(f"[FAIL] {e}")
+    sys.exit(1)
+PY
+}
+
+case "${1:-}" in
+    configure) shift; cmd_configure "$@";;
+    show)      shift; cmd_show      "$@";;
+    doctor)    shift; cmd_doctor    "$@";;
+    -h|--help|"") usage;;
+    *) echo "Unknown command: $1" >&2; usage; exit 2;;
+esac
+LABLLMEOF
+chmod 0755 /usr/local/bin/lab-llm
+log "  /usr/local/bin/lab-llm installed."
+
+log "Installing ${LAB_LIB_DIR}/llm_client.py..."
+cat > "${LAB_LIB_DIR}/llm_client.py" << 'LLMCLIENTEOF'
+"""AI Security Lab — shared LLM client.
+
+Reads OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL from
+/opt/ai-security-lab/llm.env (env vars in the current process win).
+
+Usage:
+    import sys
+    sys.path.insert(0, "/opt/ai-security-lab/lib")
+    from llm_client import get_client, MODEL
+    client = get_client()
+    r = client.chat.completions.create(model=MODEL, messages=[...])
+"""
+from __future__ import annotations
+import os
+from pathlib import Path
+
+_ENV_FILE = Path("/opt/ai-security-lab/llm.env")
+
+
+def _load_env_file() -> None:
+    if not _ENV_FILE.exists():
+        return
+    for line in _ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip())
+
+
+_load_env_file()
+
+MODEL: str = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+BASE_URL: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
+
+
+def get_client():
+    """Return a configured openai.OpenAI client. Requires `pip install openai`."""
+    from openai import OpenAI
+    return OpenAI(api_key=API_KEY or "missing", base_url=BASE_URL)
+LLMCLIENTEOF
+
+log "Installing ${LAB_BIN_DIR}/source-llm-env..."
+cat > "${LAB_BIN_DIR}/source-llm-env" << 'SRCENVEOF'
+# Source this file (don't execute it) to export OPENAI_* vars in the current shell:
+#   source /opt/ai-security-lab/bin/source-llm-env
+LAB_LLM_ENV="/opt/ai-security-lab/llm.env"
+if [ -f "$LAB_LLM_ENV" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$LAB_LLM_ENV"
+    set +a
+else
+    echo "No LLM config at $LAB_LLM_ENV. Run: sudo lab-llm configure --model ... --api-key ..." >&2
+    return 1 2>/dev/null || exit 1
+fi
+SRCENVEOF
+chmod 0644 "${LAB_BIN_DIR}/source-llm-env"
+
+# Canonical config stub (populated by `lab-llm configure`)
+if [[ ! -f "$LAB_LLM_ENV" ]]; then
+    cat > "$LAB_LLM_ENV" << 'LLMENVEOF'
+# AI Security Lab — unified LLM configuration.
+# Populated by `sudo lab-llm configure --model ... --api-key ... [--base-url ...]`
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+LLMENVEOF
+    chmod 0600 "$LAB_LLM_ENV"
+fi
+
+log "Unified LLM router installed."
+log "  Configure with:  sudo lab-llm configure --model gpt-4o-mini --api-key sk-..."
+log "  Verify with:     sudo lab-llm doctor"
+
+# =============================================================================
 # 15. REFERENCE LINKS & DOCUMENTATION
 # =============================================================================
 header "15/15 - Reference links & documentation"
@@ -663,17 +981,41 @@ header "15/15 - Reference links & documentation"
 cat > "${LAB_ROOT}/REFERENCES.md" << 'REFEOF'
 # AI Security Lab - Reference Links & Resources
 
+## LLM Configuration (read this first)
+
+All tools share a single OpenAI-compatible endpoint configured via `lab-llm`:
+
+```bash
+sudo lab-llm configure --model gpt-4o-mini --api-key sk-...
+sudo lab-llm doctor                              # verify
+source /opt/ai-security-lab/bin/source-llm-env   # export OPENAI_* in this shell
+```
+
+Canonical config lives at `/opt/ai-security-lab/llm.env`. Re-running `configure`
+also updates the per-repo `.env` files, `~/.pyrit/.env`, and `promptfooconfig.yaml`.
+
+Switch model or provider with one CLI call (no per-tool edits):
+
+```bash
+sudo lab-llm configure --model claude-3-5-sonnet --api-key sk-... \
+                       --base-url https://openrouter.ai/api/v1
+```
+
+For offline use with a local backend, see the "Optional: offline backend with
+Ollama" appendix in `AI_SECURITY_LAB_GUIDE.md`.
+
 ## Installed Tools
 
 | Tool | Location | Activation |
 |------|----------|------------|
+| lab-llm | /usr/local/bin/lab-llm | `lab-llm --help` |
 | LM Eval Harness | /opt/ai-security-lab/repos/lm-evaluation-harness | `source /opt/ai-security-lab/venvs/lm-eval-harness/bin/activate` |
 | PromptFoo | global npm | `promptfoo` |
 | CleverHans | /opt/ai-security-lab/venvs/cleverhans | `source /opt/ai-security-lab/venvs/cleverhans/bin/activate` |
 | Garak | /opt/ai-security-lab/venvs/garak | `source /opt/ai-security-lab/venvs/garak/bin/activate` |
 | Giskard | /opt/ai-security-lab/venvs/giskard | `source /opt/ai-security-lab/venvs/giskard/bin/activate` |
 | PyRIT | /opt/ai-security-lab/venvs/pyrit | `source /opt/ai-security-lab/venvs/pyrit/bin/activate` |
-| Ollama | system-wide | `ollama` |
+| Ollama (optional, offline backend) | system-wide | `ollama` |
 | JupyterLab | /opt/ai-security-lab/venvs/jupyter | `source /opt/ai-security-lab/venvs/jupyter/bin/activate && jupyter lab` |
 
 ## Jupyter Notebooks
@@ -707,29 +1049,23 @@ Pre-registered kernels (one per tool venv):
 ## Quick Start
 
 ```bash
-# Activate a Python tool (example: Garak)
+# 1. One-time LLM router configuration (do this first)
+sudo lab-llm configure --model gpt-4o-mini --api-key sk-...
+sudo lab-llm doctor
+
+# 2. Activate a Python tool (example: Garak)
 source /opt/ai-security-lab/venvs/garak/bin/activate
-garak --help
+source /opt/ai-security-lab/bin/source-llm-env
+garak --target_type openai.OpenAICompatible \
+      --target_name "$OPENAI_MODEL" \
+      --probes encoding.InjectBase64
 
-# Run PromptFoo
-promptfoo eval
+# 3. Run PromptFoo using the generated starter config
+promptfoo eval -c /opt/ai-security-lab/promptfooconfig.yaml
 
-# Start Ollama and pull a model
-ollama serve &
-ollama pull llama3.2:1b
-
-# Launch a Docker-based lab
+# 4. Launch a Docker-based lab (reads OPENAI_* from its repo .env)
 cd /opt/ai-security-lab/repos/vulnerable-llms
 docker-compose -f docker-compose.override.yml up
-```
-
-## Ollama Models
-
-Pull additional models as needed:
-```bash
-ollama pull llama3.2:1b       # Small, fast model
-ollama pull mistral-nemo      # Good for DVLA lab
-ollama pull qwen3:0.6b        # Lightweight model
 ```
 
 ## Notes
@@ -757,7 +1093,7 @@ Tool Documentation:
 - Garak:                https://github.com/NVIDIA/garak
 - Giskard:              https://github.com/Giskard-AI/giskard
 - PyRIT:                https://github.com/Azure/PyRIT
-- Ollama:               https://ollama.com
+- Ollama (optional):    https://ollama.com
 
 Lab Repositories:
 - AI Red-Teaming Playground: https://github.com/microsoft/AI-Red-Teaming-Playground-Labs
@@ -796,23 +1132,23 @@ $(echo -e "${YELLOW}IMPORTANT: Post-install steps${NC}")
 
   1. Log out and back in (or run: newgrp docker) for Docker group membership.
 
-  2. Configure API keys where needed:
-     - AI Red-Teaming Playground: edit ${REPOS_DIR}/AI-Red-Teaming-Playground-Labs/.env
-     - MAESTRO:                   edit ${REPOS_DIR}/MAESTRO/.env
-     - FinBot CTF:                edit ${REPOS_DIR}/finbot-ctf/.env
-     - Damn Vulnerable LLM Agent: edit ${REPOS_DIR}/damn-vulnerable-llm-agent/.env
+  2. Configure the LLM router (one CLI call propagates to every lab):
+       sudo lab-llm configure --model gpt-4o-mini --api-key sk-...
+       sudo lab-llm doctor                              # verify endpoint
 
-  3. Pull Ollama models:
-       ollama pull llama3.2:1b
-       ollama pull mistral-nemo
-       ollama pull qwen3:0.6b
+     This writes ${LAB_LLM_ENV}, ~/.pyrit/.env, each repo's .env,
+     and ${LAB_ROOT}/promptfooconfig.yaml. To switch model or provider
+     later, just re-run 'lab-llm configure'.
 
-  4. Launch JupyterLab:
+  3. Launch JupyterLab:
        source ${VENV_BASE}/jupyter/bin/activate
        jupyter lab --notebook-dir=${LAB_ROOT}/notebooks
 
-  5. Start exploring:
+  4. Start exploring:
        cat ${LAB_ROOT}/REFERENCES.md
+
+  Optional (offline backend):
+     See "Optional: offline backend with Ollama" in AI_SECURITY_LAB_GUIDE.md.
 
 $(echo -e "${RED}WARNING: This lab contains intentionally vulnerable applications.${NC}")
 $(echo -e "${RED}Run only in isolated environments. Never expose to the internet.${NC}")

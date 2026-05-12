@@ -8,9 +8,10 @@
 
 ## Table of Contents
 
+0. [Unified LLM Router (`lab-llm`)](#0-unified-llm-router) — **read this first**
 1. [Overview & Architecture](#1-overview--architecture)
 2. [Jupyter Notebook Environment](#2-jupyter-notebook-environment)
-3. [Ollama (Local LLM Runtime)](#3-ollama)
+3. [Ollama (optional offline backend)](#3-ollama)
 4. [Garak (LLM Vulnerability Scanner)](#4-garak)
 5. [PyRIT (AI Red-Teaming Toolkit)](#5-pyrit)
 6. [PromptFoo (LLM Evaluation & Red-Teaming)](#6-promptfoo)
@@ -25,6 +26,66 @@
     - [MAESTRO](#105-maestro)
     - [Vulnerable MCP Servers Lab](#106-vulnerable-mcp-servers-lab)
 11. [General FAQ](#11-general-faq)
+A. [Appendix: Optional offline backend with Ollama](#appendix-optional-offline-backend-with-ollama)
+
+---
+
+## 0. Unified LLM Router
+
+Every tool in this lab — Garak, PyRIT, PromptFoo, LM Eval Harness, Giskard, the Jupyter starter notebook, and the lab apps (DVLA, FinBot CTF, AI Red-Teaming Playground) — is wired to a single OpenAI-compatible endpoint.
+
+**Configure once at the start of the course:**
+
+```bash
+sudo lab-llm configure --model gpt-4o-mini --api-key sk-...
+sudo lab-llm doctor    # verifies endpoint+key+model with a 1-token round-trip
+```
+
+That writes:
+
+| File | Purpose |
+|---|---|
+| `/opt/ai-security-lab/llm.env` | canonical config (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`) |
+| `~/.pyrit/.env` | PyRIT-specific variable names mapped from the canonical values |
+| `/opt/ai-security-lab/repos/<repo>/.env` | per-lab `.env` for each cloned lab repo |
+| `/opt/ai-security-lab/promptfooconfig.yaml` | PromptFoo starter config |
+
+**Switch model or provider later** — just re-run `lab-llm configure`. No per-tool edits.
+
+```bash
+# Switch to a different cloud provider
+sudo lab-llm configure --model claude-3-5-sonnet --api-key sk-... \
+                       --base-url https://openrouter.ai/api/v1
+
+# Switch back to OpenAI
+sudo lab-llm configure --model gpt-4o-mini --api-key sk-...
+```
+
+**Inside any shell**, before running PromptFoo / Garak / LM Eval Harness:
+
+```bash
+source /opt/ai-security-lab/bin/source-llm-env
+echo "$OPENAI_MODEL $OPENAI_BASE_URL"
+```
+
+**Inside Python** (any Jupyter kernel or venv):
+
+```python
+import sys
+sys.path.insert(0, "/opt/ai-security-lab/lib")
+from llm_client import get_client, MODEL
+client = get_client()
+r = client.chat.completions.create(model=MODEL, messages=[{"role":"user","content":"hi"}])
+```
+
+**Inspect or troubleshoot:**
+
+```bash
+lab-llm show       # current model, base URL, redacted API key
+lab-llm doctor     # verify endpoint
+```
+
+For an offline backend (Ollama on the same machine), see [Appendix: Optional offline backend with Ollama](#appendix-optional-offline-backend-with-ollama).
 
 ---
 
@@ -231,7 +292,9 @@ jupyter notebook --notebook-dir=/opt/ai-security-lab/notebooks
 
 ## 3. Ollama
 
-Ollama is the local LLM runtime that many other tools in this lab depend on. Start it first.
+Ollama is an **optional** local LLM runtime. The default lab flow uses a cloud OpenAI-compatible endpoint via `lab-llm configure` (see [section 0](#0-unified-llm-router)). Use Ollama if you want to run offline or test against a local model — see [Appendix: Optional offline backend with Ollama](#appendix-optional-offline-backend-with-ollama) for the one-liner that points the unified router at it.
+
+The reference below covers the Ollama runtime itself; the lab tools are not configured to talk to it by default.
 
 ### 3.1 Starting Ollama
 
@@ -332,37 +395,39 @@ python -m garak --list_detectors
 
 ### 4.2 Running Scans
 
-**Scan a local Ollama model:**
+Garak uses the unified router. Make sure you've already run `sudo lab-llm configure` once, then:
 
 ```bash
-# Ensure Ollama is running first
-python -m garak --target_type ollama --target_name mistral-nemo --probes dan
+source /opt/ai-security-lab/bin/source-llm-env   # exports OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+```
+
+**Scan with the configured model:**
+
+```bash
+python -m garak --target_type openai.OpenAICompatible \
+                --target_name "$OPENAI_MODEL" \
+                --probes dan
 ```
 
 **Scan with specific probes:**
 
 ```bash
 # DAN jailbreak probes
-python -m garak -t ollama -n mistral-nemo -p dan
+python -m garak -t openai.OpenAICompatible -n "$OPENAI_MODEL" -p dan
 
 # Prompt injection
-python -m garak -t ollama -n mistral-nemo -p promptinject
+python -m garak -t openai.OpenAICompatible -n "$OPENAI_MODEL" -p promptinject
 
 # Encoding-based attacks
-python -m garak -t ollama -n mistral-nemo -p encoding
+python -m garak -t openai.OpenAICompatible -n "$OPENAI_MODEL" -p encoding
 
 # Multiple probes at once
-python -m garak -t ollama -n mistral-nemo -p "dan,encoding,promptinject"
+python -m garak -t openai.OpenAICompatible -n "$OPENAI_MODEL" -p "dan,encoding,promptinject"
 ```
 
-**Scan an OpenAI model:**
+To target a different provider for a single run, just re-run `sudo lab-llm configure` with new `--model` / `--api-key` / `--base-url` and re-source `source-llm-env`. No per-tool edits.
 
-```bash
-export OPENAI_API_KEY="sk-..."
-python -m garak --target_type openai --target_name gpt-4 --probes dan
-```
-
-**Scan a HuggingFace model:**
+**Scan a HuggingFace model (separate flow, uses HF API directly):**
 
 ```bash
 python -m garak --target_type huggingface --target_name gpt2 --probes encoding
@@ -391,23 +456,17 @@ cat ~/.local/share/garak/garak_runs/garak.*.report.jsonl | python -m json.tool |
 
 ### 4.5 FAQ - Garak
 
-**Q: `ConnectionError` when scanning Ollama model.**
-A: Ollama must be running. Start it with `ollama serve` in another terminal. Verify with `curl http://127.0.0.1:11434/api/tags`.
+**Q: `ConnectionError` or 401 when scanning the configured model.**
+A: Run `sudo lab-llm doctor` to verify the endpoint+key+model. Make sure you've sourced `/opt/ai-security-lab/bin/source-llm-env` in the current shell.
 
 **Q: Scan runs very slowly.**
-A: Reduce generations per prompt with `-g 2`. Use a subset of probes instead of all. For remote models, add `--parallel_attempts 5`. For Ollama, use a smaller model.
+A: Reduce generations per prompt with `-g 2`. Use a subset of probes instead of all. Add `--parallel_attempts 5`. If you're hitting a paid endpoint, watch your rate limits in the provider dashboard.
 
 **Q: `No such model` error.**
-A: The model name must match exactly what Ollama has. Run `ollama list` to see available names.
+A: The model name must match exactly what the provider expects. Re-run `sudo lab-llm configure --model <correct-name> ...` and re-source `source-llm-env`.
 
 **Q: Empty responses from the model.**
-A: Garak retries up to 3 times. If persistent, verify the model works with `ollama run <model> "test"`. Try increasing timeout in a YAML config:
-```yaml
-plugins:
-  generators:
-    ollama.OllamaGeneratorChat:
-      timeout: 120
-```
+A: Garak retries up to 3 times. If persistent, verify the endpoint with `lab-llm doctor`. For underpowered local models switched in via `--base-url http://127.0.0.1:11434/v1`, try a larger model.
 
 **Q: Out of memory when scanning HuggingFace models.**
 A: Use smaller models (`distilgpt2`) or use the HuggingFace Inference API instead: `--target_type huggingface.InferenceAPI --target_name gpt2`.
@@ -428,67 +487,58 @@ PyRIT is primarily used as a Python library in scripts or Jupyter notebooks.
 
 ### 5.2 Configuration
 
-Create a `.env` file at `~/.pyrit/.env`:
+PyRIT reads `~/.pyrit/.env`, which `lab-llm` writes for you:
 
 ```bash
-mkdir -p ~/.pyrit
-cat > ~/.pyrit/.env << 'EOF'
-# For OpenAI
-OPENAI_CHAT_KEY=sk-your-key
-OPENAI_CHAT_ENDPOINT=https://api.openai.com/v1/chat/completions
-OPENAI_CHAT_MODEL=gpt-4o
-
-# For Ollama (local)
-# OPENAI_CHAT_KEY=local
-# OPENAI_CHAT_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions
-# OPENAI_CHAT_MODEL=mistral-nemo
-EOF
+sudo lab-llm configure --model gpt-4o-mini --api-key sk-...
+# Writes ~/.pyrit/.env with the right OPENAI_CHAT_KEY / OPENAI_CHAT_ENDPOINT / OPENAI_CHAT_MODEL.
 ```
+
+To switch model or provider later, just re-run `sudo lab-llm configure` — no manual file edits.
 
 ### 5.3 Basic Usage (Python Script)
 
 ```python
+import os
 from pyrit import initialize_pyrit_async
 from pyrit.common import SimpleInitializer
 from pyrit.chat import OpenAIChatTarget
 
-# Initialize PyRIT
 await initialize_pyrit_async(
     memory_db_type="InMemory",
-    initializers=[SimpleInitializer()]
+    initializers=[SimpleInitializer()],
 )
 
-# Create a target pointing at your LLM
+# OPENAI_CHAT_KEY / OPENAI_CHAT_ENDPOINT / OPENAI_CHAT_MODEL are read from
+# ~/.pyrit/.env which lab-llm populated. You can also pass them explicitly:
 target = OpenAIChatTarget(
-    api_key="local",
-    endpoint="http://127.0.0.1:11434/v1/chat/completions",
-    model="mistral-nemo"
+    api_key=os.environ["OPENAI_CHAT_KEY"],
+    endpoint=os.environ["OPENAI_CHAT_ENDPOINT"],
+    model=os.environ["OPENAI_CHAT_MODEL"],
 )
 ```
 
-### 5.4 Using with Ollama
-
-```bash
-# Ollama exposes an OpenAI-compatible API
-# Set these environment variables:
-export OPENAI_CHAT_KEY=local
-export OPENAI_CHAT_ENDPOINT=http://127.0.0.1:11434/v1/chat/completions
-export OPENAI_CHAT_MODEL=mistral-nemo
-```
-
-### 5.5 FAQ - PyRIT
+### 5.4 FAQ - PyRIT
 
 **Q: `ModuleNotFoundError: No module named 'pyrit'`**
 A: Ensure you activated the venv: `source /opt/ai-security-lab/venvs/pyrit/bin/activate`.
 
 **Q: `401 Unauthorized` when connecting to an API.**
-A: Verify your API key. For Ollama, any non-empty string works as the key (e.g., `local`).
+A: Run `sudo lab-llm doctor` to verify the endpoint+key+model. Re-run `sudo lab-llm configure` with the right key.
 
-**Q: Connection refused to Ollama.**
-A: Ensure Ollama is running and the endpoint URL is correct: `http://127.0.0.1:11434/v1/chat/completions`.
+**Q: Connection refused / wrong endpoint.**
+A: Re-run `sudo lab-llm configure --base-url <correct-url>`. PyRIT picks up the new `OPENAI_CHAT_ENDPOINT` from `~/.pyrit/.env` automatically.
 
 **Q: `429 Too Many Requests` rate-limiting.**
-A: Set `max_requests_per_minute=10` in your orchestrator configuration. Ollama has no rate limits (local execution).
+A: Set `max_requests_per_minute=10` in your orchestrator configuration.
+
+**Q: How do I run the example notebooks?**
+A: Install Jupyter inside the venv, then launch:
+```bash
+source /opt/ai-security-lab/venvs/pyrit/bin/activate
+pip install jupyter
+jupyter notebook /opt/ai-security-lab/repos/  # if PyRIT notebooks are cloned
+```
 
 **Q: How do I run the example notebooks?**
 A: Install Jupyter inside the venv, then launch:
@@ -544,33 +594,31 @@ promptfoo redteam report
 promptfoo redteam plugins
 ```
 
-### 6.4 Configuring with Ollama
+### 6.4 Using the unified LLM router
 
-In your `promptfooconfig.yaml`:
+`lab-llm configure` writes a starter config at `/opt/ai-security-lab/promptfooconfig.yaml`:
 
 ```yaml
 providers:
-  - id: ollama:chat:mistral-nemo
+  - id: openai:chat:${OPENAI_MODEL}
     config:
-      base_url: http://localhost:11434
-      temperature: 0.7
+      apiBaseUrl: ${OPENAI_BASE_URL}
+      apiKeyEnvar: OPENAI_API_KEY
 ```
 
-### 6.5 Configuring with OpenAI
+Run it with:
 
 ```bash
-export OPENAI_API_KEY=sk-...
+source /opt/ai-security-lab/bin/source-llm-env
+promptfoo eval -c /opt/ai-security-lab/promptfooconfig.yaml
 ```
 
-```yaml
-providers:
-  - openai:gpt-4o
-```
+To switch model or provider, re-run `sudo lab-llm configure`. It regenerates the file. Copy and edit it for project-specific evals.
 
-### 6.6 FAQ - PromptFoo
+### 6.5 FAQ - PromptFoo
 
 **Q: `OPENAI_API_KEY not found` error.**
-A: Either set the environment variable or specify it in config. For Ollama you don't need an OpenAI key.
+A: Run `source /opt/ai-security-lab/bin/source-llm-env` in the same shell before `promptfoo eval`, or pass `--env-path /opt/ai-security-lab/llm.env`.
 
 **Q: Evaluations time out.**
 A: Increase timeouts:
@@ -631,23 +679,18 @@ lm_eval --model hf \
     --batch_size 8
 ```
 
-**With Ollama (via local API):**
+**With the unified LLM router (any OpenAI-compatible endpoint):**
 
 ```bash
-lm_eval --model local-completions \
-    --model_args model=mistral-nemo,base_url=http://localhost:11434/v1/completions,num_concurrent=1 \
+source /opt/ai-security-lab/bin/source-llm-env
+
+lm_eval --model openai-chat-completions \
+    --model_args "model=${OPENAI_MODEL},base_url=${OPENAI_BASE_URL}/chat/completions,num_concurrent=1" \
     --tasks hellaswag \
     --batch_size 1
 ```
 
-**With OpenAI:**
-
-```bash
-export OPENAI_API_KEY=sk-...
-lm_eval --model openai-completions \
-    --model_args model=davinci-002 \
-    --tasks hellaswag
-```
+To switch model or provider for a future run, re-run `sudo lab-llm configure` and re-source `source-llm-env`.
 
 **Quick test run (limit samples):**
 
@@ -696,8 +739,8 @@ A: Use `--limit 10` for testing. For production, switch to `vllm` backend if you
 **Q: GGUF model takes hours to load.**
 A: Always provide a separate tokenizer: `--model_args pretrained=/path,gguf_file=model.gguf,tokenizer=/path/to/tokenizer`.
 
-**Q: Ollama evaluation gives bad results.**
-A: Set `num_concurrent=1` and `--batch_size 1`. Ollama's completion API may behave differently than HuggingFace for certain tasks.
+**Q: OpenAI-compatible endpoint gives bad results.**
+A: Set `num_concurrent=1` and `--batch_size 1`. Smaller / quantized models routed via the OpenAI-compat protocol may behave differently than HuggingFace for certain tasks. Verify the endpoint with `lab-llm doctor` first.
 
 ---
 
@@ -715,17 +758,16 @@ python
 ### 8.2 Quick Scan Example
 
 ```python
+import os, sys
+sys.path.insert(0, "/opt/ai-security-lab/lib")
+from llm_client import MODEL, BASE_URL  # loads /opt/ai-security-lab/llm.env into os.environ
+
 import giskard
 import pandas as pd
 
-# Configure LLM provider (needed for the scanning engine)
-import os
-os.environ["OPENAI_API_KEY"] = "your-key"
-# OR for Ollama:
-giskard.llm.set_llm_model("ollama/mistral-nemo", disable_structured_output=True,
-                           api_base="http://localhost:11434")
-giskard.llm.set_embedding_model("ollama/nomic-embed-text",
-                                 api_base="http://localhost:11434")
+# Giskard reads OPENAI_API_KEY / OPENAI_BASE_URL from the env (lab-llm has set them).
+giskard.llm.set_llm_model(f"openai/{MODEL}", disable_structured_output=True, api_base=BASE_URL)
+giskard.llm.set_embedding_model("openai/text-embedding-3-small", api_base=BASE_URL)
 
 # Wrap your model
 def my_model(df: pd.DataFrame):
@@ -783,8 +825,11 @@ giskard.llm.set_embedding_model("text-embedding-3-small")
 **Q: Scan is very slow.**
 A: Limit which detectors run: `giskard.scan(model, only=["robustness", "prompt_injection"])`.
 
-**Q: Ollama integration fails in Jupyter notebooks.**
+**Q: Async errors in Jupyter notebooks.**
 A: Add `import nest_asyncio; nest_asyncio.apply()` at the top of your notebook.
+
+**Q: Embedding model not available on the configured provider.**
+A: Some endpoints (e.g., a small local OpenAI-compatible server) only serve chat models. Either point the embedding call at a real OpenAI-compatible embedding endpoint, or skip embedding-dependent detectors with `giskard.scan(model, only=["prompt_injection"])`.
 
 **Q: Model wrapping fails with type errors.**
 A: Your prediction function must accept a `pd.DataFrame` and return a **list** (one result per row), not a single string.
@@ -926,12 +971,9 @@ An intentionally vulnerable chatbot for learning prompt injection techniques.
 source /opt/ai-security-lab/venvs/damn-vulnerable-llm-agent/bin/activate
 cd /opt/ai-security-lab/repos/damn-vulnerable-llm-agent
 
-# Configure your LLM provider
-cp .env.ollama.template .env
-# Edit .env with your Ollama settings
-
-# Ensure Ollama is running and the model is pulled
-ollama pull mistral-nemo
+# .env was populated by `sudo lab-llm configure` — no manual edit needed.
+# Verify the values:
+cat .env
 
 # Launch
 python -m streamlit run main.py
@@ -942,7 +984,7 @@ python -m streamlit run main.py
 **FAQ:**
 
 **Q: The chatbot gives poor or incoherent answers.**
-A: Smaller LLMs perform poorly as ReAct agents. Use `mistral-nemo` as recommended by the project authors. Ensure the model is fully downloaded (`ollama list`).
+A: Smaller LLMs perform poorly as ReAct agents. Use a stronger model — re-run `sudo lab-llm configure --model gpt-4o-mini --api-key sk-...` (or any capable model) to update DVLA's `.env` automatically.
 
 **Q: Streamlit fails to start.**
 A: Install streamlit if missing: `pip install streamlit`. Check that the venv is activated.
@@ -1034,7 +1076,7 @@ Cloud Security Alliance's AI threat analysis framework using a Next.js web inter
 ```bash
 # Terminal 1: Start the web interface
 cd /opt/ai-security-lab/repos/MAESTRO
-cp .env.example .env      # Edit with your LLM provider credentials
+# .env is already populated by `sudo lab-llm configure` (OPENAI_API_KEY etc.).
 npm run dev
 
 # Terminal 2: Start the AI flows backend
@@ -1044,12 +1086,12 @@ npm run genkit:watch
 
 **Access:** `http://localhost:9002`
 
-**Supported LLM providers:** Google Gemini, OpenAI, or Ollama. Configure in `.env`.
+**Known limitation:** MAESTRO uses Google Genkit and defaults to Gemini in its source code. `lab-llm configure` populates `.env` with the unified `OPENAI_*` vars, but wiring MAESTRO's Genkit calls to that endpoint requires a separate code change to `/opt/ai-security-lab/repos/MAESTRO` (Genkit's OpenAI plugin). Treated as a follow-up — not in scope for the unified router refactor.
 
 **FAQ:**
 
 **Q: The UI loads but threat analysis fails.**
-A: Check that your LLM provider credentials are set in `.env` and that `genkit:watch` is running in the second terminal.
+A: Either configure a Gemini key in `.env` for now, or wire Genkit's OpenAI plugin to `OPENAI_API_KEY` / `OPENAI_BASE_URL`. Confirm `genkit:watch` is running in the second terminal.
 
 **Q: npm install fails.**
 A: Ensure Node.js 18+ is installed (`node --version`). Run `npm install` again. If it still fails, try `rm -rf node_modules package-lock.json && npm install`.
@@ -1127,7 +1169,12 @@ A: It depends on your usage:
 - **Required for their specific labs:** AI Red-Teaming Playground (OpenAI/Azure), MAESTRO (any LLM provider)
 
 **Q: Can I run everything with just Ollama (no cloud APIs)?**
-A: Most tools support Ollama as a backend. Garak, PyRIT, PromptFoo, and LM Eval Harness all work with local Ollama models. Giskard can use Ollama for both the LLM and embedding model. Some lab environments (AI Red-Teaming Playground) require cloud API keys.
+A: Yes — point the unified router at Ollama with one CLI call:
+```bash
+sudo lab-llm configure --model llama3.2 --api-key local \
+                       --base-url http://127.0.0.1:11434/v1
+```
+Garak, PyRIT, PromptFoo, LM Eval Harness, Giskard, and the lab apps then all hit Ollama via its OpenAI-compatible endpoint. Some lab environments (e.g., AI Red-Teaming Playground, MAESTRO) may still expect a real cloud key for certain features. See the [appendix](#appendix-optional-offline-backend-with-ollama).
 
 ### Networking & Security
 
@@ -1154,3 +1201,48 @@ A: Minimum 8GB for basic usage. 16GB+ recommended if running Docker labs alongsi
 
 **Q: How much disk space does this lab need?**
 A: The tools and repos themselves need roughly 5-10GB. Each Ollama model adds 1-5GB. Docker images for the labs add 2-5GB each. Budget at least 30-50GB total.
+
+---
+
+## Appendix: Optional offline backend with Ollama
+
+Use this when you want to run the labs against a local Ollama model instead of a cloud API. The unified router (`lab-llm configure`) handles it — the only difference is `--base-url` points at Ollama's OpenAI-compatible endpoint.
+
+### A.1 Install and start Ollama
+
+If Ollama isn't already running (the setup script installs it but doesn't auto-start it):
+
+```bash
+sudo systemctl start ollama          # systemd
+# or
+ollama serve &                       # foreground / non-systemd
+```
+
+Verify with `curl -s http://127.0.0.1:11434/api/tags`.
+
+### A.2 Pull a model
+
+```bash
+ollama pull llama3.2:1b              # 1.3 GB, fast, good for smoke tests
+ollama pull mistral-nemo             # better for ReAct agents (DVLA)
+ollama pull qwen3:0.6b               # very small, CPU-friendly
+```
+
+### A.3 Point the unified router at it
+
+```bash
+sudo lab-llm configure \
+    --model llama3.2:1b \
+    --api-key local \
+    --base-url http://127.0.0.1:11434/v1
+
+sudo lab-llm doctor                  # verifies Ollama responds
+```
+
+That's it. Every lab tool — Garak, PyRIT, PromptFoo, LM Eval Harness, Giskard, the Jupyter starter, DVLA — now hits Ollama via the OpenAI-compatible protocol. To switch back to a cloud provider, just re-run `lab-llm configure` with the cloud `--base-url` and key.
+
+### A.4 Caveats
+
+- Some lab apps (AI Red-Teaming Playground, MAESTRO) may still need a real cloud key for certain features even if the chat endpoint is local.
+- Embedding-dependent features in Giskard / RAG evaluation need an embedding endpoint. Ollama supports embeddings (`ollama pull nomic-embed-text`) but Giskard's `set_embedding_model("openai/...")` call won't auto-route there — see the [Giskard section](#8-giskard) for the explicit `api_base` form.
+- Smaller models (under ~7B) often perform poorly as ReAct agents. Use a larger model or switch to a cloud provider for those labs.
