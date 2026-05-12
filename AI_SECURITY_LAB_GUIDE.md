@@ -1086,12 +1086,14 @@ npm run genkit:watch
 
 **Access:** `http://localhost:9002`
 
-**Known limitation:** MAESTRO uses Google Genkit and defaults to Gemini in its source code. `lab-llm configure` populates `.env` with the unified `OPENAI_*` vars, but wiring MAESTRO's Genkit calls to that endpoint requires a separate code change to `/opt/ai-security-lab/repos/MAESTRO` (Genkit's OpenAI plugin). Treated as a follow-up — not in scope for the unified router refactor.
+**LLM provider:** Wired to the unified router. The setup script patches `src/ai/genkit.ts` so MAESTRO's Genkit OpenAI plugin honours `OPENAI_BASE_URL`, and `lab-llm configure` writes `LLM_PROVIDER=openai`, `LLM_MODEL=<model>`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL` into MAESTRO's `.env`. Switch model/provider by re-running `sudo lab-llm configure` — no code edits, no Gemini key needed.
+
+To temporarily fall back to Gemini, set `LLM_PROVIDER=google` and `GOOGLE_API_KEY=...` in `.env` (overrides what `lab-llm configure` wrote).
 
 **FAQ:**
 
 **Q: The UI loads but threat analysis fails.**
-A: Either configure a Gemini key in `.env` for now, or wire Genkit's OpenAI plugin to `OPENAI_API_KEY` / `OPENAI_BASE_URL`. Confirm `genkit:watch` is running in the second terminal.
+A: Run `sudo lab-llm doctor` to confirm the endpoint+key+model work. Check `cat /opt/ai-security-lab/repos/MAESTRO/.env` — it should contain `LLM_PROVIDER=openai`, `LLM_MODEL=...`, `OPENAI_API_KEY=...`, `OPENAI_BASE_URL=...`. Confirm `genkit:watch` is running in the second terminal.
 
 **Q: npm install fails.**
 A: Ensure Node.js 18+ is installed (`node --version`). Run `npm install` again. If it still fails, try `rm -rf node_modules package-lock.json && npm install`.
