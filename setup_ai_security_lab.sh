@@ -593,7 +593,10 @@ create_venv "jupyter" || {
 }
 VENV_JUPYTER="${VENV_PATH}"
 log "Installing JupyterLab and Jupyter Notebook..."
-"${VENV_JUPYTER}/bin/pip" install jupyterlab notebook ipywidgets 2>>"$LOG_FILE"
+"${VENV_JUPYTER}/bin/pip" install \
+    jupyterlab notebook ipywidgets \
+    numpy matplotlib torch \
+    2>>"$LOG_FILE"
 
 log "Registering tool venvs as Jupyter kernels..."
 
